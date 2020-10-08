@@ -98,29 +98,32 @@ class generate_data:
             x_sol, dxdt_sol = self.model.solve(x0, u_in, theta)
 
             #Storing values in arrays
-            x_sol = x_sol[::self.model.skip_el]
-            dxdt_sol = dxdt_sol[::self.model.skip_el]
+            # x_sol = x_sol[::self.model.skip_el]
+            # dxdt_sol = dxdt_sol[::self.model.skip_el]
             u_in = u_in[::self.model.skip_el]
             j = 0
+            #print(x_sol)
+            #print("len(x) = {}, len(dxdt) = {}, len(u) = {}".format(len(x_sol), len(dxdt_sol), len(u_in)))
             for x, dx, u in zip(x_sol, dxdt_sol, u_in): 
+                #print("i = {}, j = {}, while len(x) = {}. product = {}.".format(i, j, len(x_sol), len(x_sol)*i))
                 #First include x's
                 k = 0
                 for x_el in x: 
-                    X_NN[i*len(x_sol.T)+j][k] = x_el
+                    X_NN[(i*len(x_sol)+j),k] = x_el
                     k += 1
                 #Then derivatives:
                 for dx_el in dx: 
-                    X_NN[i*len(x_sol.T)+j][k] = dx_el
+                    X_NN[i*len(x_sol)+j][k] = dx_el
                     k += 1
                 
                 #Finally inputs
                 for u_el in u: 
-                    X_NN[i*len(x_sol.T)+j][k] = u_el
+                    X_NN[i*len(x_sol)+j][k] = u_el
                     k += 1
 
                 #Then adding NN solutions 
                 for k, th in enumerate(theta): 
-                    y_NN[i*len(x_sol.T)+j][k] = theta[k]
+                    y_NN[i*len(x_sol)+j][k] = th
 
                 j += 1
         np.save(filename_X, X_NN)
