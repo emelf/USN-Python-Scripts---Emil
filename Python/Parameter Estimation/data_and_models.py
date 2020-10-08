@@ -147,7 +147,6 @@ class generate_data:
         X_train, X_test, y_train, y_test = train_test_split(X_NN_scaled, y_NN_scaled, test_size=0.1)
         return X_train, X_test, y_train, y_test, X_NN_scaled, y_NN_scaled
         
-
 class handle_NNs: 
     def __init__(self, N_inputs, N_outputs, node_limit=(10, 400), layer_limit=(1,4), N_models=4*20, epochs=5): 
         self.nodes = np.arange(node_limit[0], node_limit[1], 1)
@@ -157,38 +156,74 @@ class handle_NNs:
 
     def make_NN(self, N_layers, N_nodes, dropout=0.1): 
         model = keras.Sequential()
-        model.add(keras.Input(shape=(self.N_inputs,) )) #Stopped here
+        model.add(keras.Input(shape=(self.N_inputs,), name="Input_Layer")) #Stopped here
         for i in range(N_layers): 
-            model.add(keras.layers.Dense(N_nodes, activation='relu') )
-            model.add(keras.layers.Dropout(dropout))
-        model.add(keras.layers.Dense(self.N_outputs))
+            model.add(keras.layers.Dense(N_nodes, activation='relu', name=f"Layer_{i}"))
+            model.add(keras.layers.Dropout(dropout, name=f"Dropout_{i}"))
+        model.add(keras.layers.Dense(self.N_outputs, name="Output_Layer"))
         model.compile(optimizer='adam', loss='mse', metrics=['accuracy'])
         return model
 
-    def make_range_NN(self, N_nodes=(10, 100), N_layers=(1, 4), N_tries=40):
+    def make_range_NN(self, N_nodes=(10, 100), N_layers=(1, 4), N_net=40):
         #Rounds N_tries to fit even tries in each layers 
         dN_layers = N_layers[1]-N_layers[0] + 1 #The number of layers that is tried 
-        dN_nodes = round(N_tries/dN_layers) #Number of node attempts 
+        dN_nodes = round(N_net/dN_layers) #Number of node attempts 
         NN_layers = np.linspace(N_layers[0], N_layers[1], dN_layers, dtype=np.int16) 
         NN_nodes = np.linspace(N_nodes[0], N_nodes[1], dN_nodes, dtype=np.int16) 
 
         NNs = []
+        NN_lay_nod = []
         for layer in NN_layers: 
             for node in NN_nodes: 
                 NNs.append(self.make_NN(layer, node)) 
-        return NNs 
+                NN_lay_nod.append([layer, node])
+        return NNs, NN_lay_nod
 
-    def find_opt_hyperparams(self, NNs, X_data, y_data, epochs=5): 
+    def find_opt_hyperparams(self, X_data, y_data, N_nodes=(10, 100), N_layers=(1, 4), N_net=40, epochs=5): 
         res = {} #Will contain {1: [loss, acc]}
+        NNs, NN_lay_nod = self.make_range_NN(N_nodes=N_nodes, N_layers=N_layers,N_net=N_net)
         for i, NN in enumerate(NNs): 
+            print(f"\rWorking on NN {i+1} of {len(NNs)}")
             history = NN.fit(X_data, y_data, epochs=epochs, verbose=0)
             history = history.history 
-            res[i] = [history['loss'], history['accuracy']]
+            res[i] = [history['loss'], history['accuracy'], NN_lay_nod[i]]
+        self.res = res
         return res 
 
+    def sort_results(self, print_res=True):  
+        res_sorted = {} 
+        nodes_sorted = []
+        layers_sorted = []
+        least_loss = 0
+        for i in range(len(self.res)): #Sorts the NNs
+            least_loss_temp = 1e9
+            for j in range(len(self.res)): #Finds the best/worst NNs 
+                loss_NN = self.res[j][0][-1]
+                if loss_NN < least_loss_temp and loss_NN > least_loss: 
+                    j_least = j 
+                    least_loss_temp = loss_NN 
+            res_sorted[f"NN_{j_least}"] = self.res[j_least][0]
+            layers_sorted.append(self.res[j_least][2][0])
+            nodes_sorted.append(self.res[j_least][2][1])
+            least_loss = least_loss_temp
+        if print_res:
+            print("The rankings of the Neural Networks are :")
+            for i, res in enumerate(res_sorted): 
+                print(f"{res} with a loss of {res_sorted[res][-1]}. Nodes = {nodes_sorted[i]}, layers = {layers_sorted[i]}")
+        return res_sorted
 
+
+    def plot_opt_NNs(self, N_plots):
+        plots = np.linspace(0, len(self.res)-1, N_plots, dtype=np.int16)
+        res_opt = self.sort_results(print_res=False)
+        fig, ax = plt.subplots(1,1)
+        for i, res in enumerate(res_opt): 
+            if i in plots: 
+                ax.plot(res_opt[res], label=res)
+
+        ax.set_xlabel("Epochs")
+        ax.set_ylabel("Loss")
+        ax.legend() 
+        plt.show()
     
-        
 
-
-        
