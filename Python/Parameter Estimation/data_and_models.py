@@ -156,7 +156,7 @@ class handle_NNs:
 
     def make_NN(self, N_layers, N_nodes, dropout=0.1): 
         model = keras.Sequential()
-        model.add(keras.Input(shape=(self.N_inputs,), name="Input_Layer")) #Stopped here
+        model.add(keras.Input(shape=(self.N_inputs,), name="Input_Layer")) 
         for i in range(N_layers): 
             model.add(keras.layers.Dense(N_nodes, activation='relu', name=f"Layer_{i}"))
             model.add(keras.layers.Dropout(dropout, name=f"Dropout_{i}"))
@@ -225,5 +225,25 @@ class handle_NNs:
         ax.set_ylabel("Loss")
         ax.legend() 
         plt.show()
+
+    def build_model(self, hp): #Builds cone-shaped sequential models
+        N1 = hp.Int('n_starting_nodes', min_value=32, max_value=2048, step=128)
+        N_layers = hp.Int('n_layers', min_value=1, max_value=10, step=2)
+        #Find number of nodes in all layers: 
+        a = (self.N_outputs-N1)/N_layers
+        N_nodes = [int(N1 + a*i) for i in range(N_layers)]    
+
+        model = keras.Sequential()
+        model.add(keras.Input(shape=(self.N_inputs,), name="Input_Layer")) 
+        for i, node in enumerate(N_nodes): 
+            model.add(keras.layers.Dense(node, activation='relu', name=f"Layer_{i+1}"))
+            model.add(keras.layers.Dropout(0.1, name=f"Dropout_{i+1}"))
+
+        model.add(keras.layers.Dense(self.N_outputs, name="Output_Layer"))
+        model.compile(optimizer=keras.optimizers.Adam(hp.Choice('learning_rate',values=[1e-3, 1e-4])),
+                      loss='mse', metrics=['accuracy'])
+        return model
+
+
     
 
