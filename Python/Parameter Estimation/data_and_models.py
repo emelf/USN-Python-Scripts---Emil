@@ -228,7 +228,7 @@ class handle_NNs:
 
     def build_model(self, hp): #Builds cone-shaped sequential models
         N1 = hp.Int('n_starting_nodes', min_value=32, max_value=2048, step=128)
-        N_layers = hp.Int('n_layers', min_value=1, max_value=10, step=2)
+        N_layers = hp.Int('n_layers', min_value=1, max_value=10, step=3)
         #Find number of nodes in all layers: 
         a = (self.N_outputs-N1)/N_layers
         N_nodes = [int(N1 + a*i) for i in range(N_layers)]    
