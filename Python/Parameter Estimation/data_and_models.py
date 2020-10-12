@@ -5,6 +5,9 @@ from sklearn.model_selection import train_test_split
 import tensorflow as tf 
 from tensorflow import keras 
 from math import ceil
+from kerastuner.tuners import Hyperband
+import time
+import os
 
 class dynamical_model: 
     def __init__(self, dxdt, f_x):
@@ -64,6 +67,31 @@ class dynamical_model:
     def solve(self, x0, u, theta): 
         x_sol, dxdt_sol = self.RK4_solver(x0, u, theta)
         return x_sol[::self.skip_el], dxdt_sol[::self.skip_el]
+
+    def generator(self, batch_size=32): #I have decided to let x0 have values close to each other, with diff of +-2
+        self.N_steps = 2
+        self.t0 = 0 
+        self.t1 = 0.02
+        self.dt = (self.t1 - self.t0)/self.N_steps 
+        while True:
+            X_NN = np.zeros((batch_size, 6))
+            y_NN = np.zeros((batch_size, 6))
+            for j in range(batch_size):
+                x0 = np.random.uniform(self.x0_range[0][0], self.x0_range[0][1]) 
+                x0 = np.array([x0, x0+np.random.uniform(-2, 2)])
+                u = self.find_input_vals() 
+                theta = [] 
+                for th in self.theta_range: 
+                    theta.append(np.random.uniform(th[0], th[1]))
+                x_sol, dxdt_sol = self.solve(x0, u, theta)
+                X_NN[j][0:2] = x_sol[-1] 
+                X_NN[j][2:4] = dxdt_sol[-1]
+                X_NN[j][4:6] = u[-1] 
+                y_NN[j] = np.array(theta)
+                #X_NN[j][6:] = np.array(theta[0:2])
+                #y_NN[j] =np.array(theta[2:])
+            yield X_NN, y_NN
+                
 
     def plot_solve(self, x0, u, theta, names_x, names_u): 
         x_sol, dx_sol = self.solve(x0, u, theta)
@@ -146,72 +174,24 @@ class generate_data:
 
         X_train, X_test, y_train, y_test = train_test_split(X_NN_scaled, y_NN_scaled, test_size=0.1)
         return X_train, X_test, y_train, y_test, X_NN_scaled, y_NN_scaled
+
+    def generator(self, X_scaler_data, y_scaler_data, batch_size=32): 
+        while True:
+            X_scaler = MinMaxScaler() 
+            y_scaler = MinMaxScaler() 
+            X_scaler = X_scaler.fit(X_scaler_data)
+            y_scaler = y_scaler.fit(y_scaler_data) 
+            gen_data = self.model.generator(batch_size=batch_size) 
+            for i in range(batch_size):
+                X_NN, y_NN = next(gen_data)
+                X_NN = X_scaler.transform(X_NN)
+                y_NN = y_scaler.transform(X_NN)
+                yield X_NN, y_NN
         
 class handle_NNs: 
-    def __init__(self, N_inputs, N_outputs, node_limit=(10, 400), layer_limit=(1,4), N_models=4*20, epochs=5): 
-        self.nodes = np.arange(node_limit[0], node_limit[1], 1)
-        self.layer_limit = np.arange(layer_limit[0], layer_limit[1], 1)
+    def __init__(self, N_inputs, N_outputs, node_limit=(10, 400), layer_limit=(1,4), epochs=5): 
         self.N_inputs = N_inputs 
         self.N_outputs = N_outputs 
-
-    def make_NN(self, N_layers, N_nodes, dropout=0.1): 
-        model = keras.Sequential()
-        model.add(keras.Input(shape=(self.N_inputs,), name="Input_Layer")) 
-        for i in range(N_layers): 
-            model.add(keras.layers.Dense(N_nodes, activation='relu', name=f"Layer_{i}"))
-            model.add(keras.layers.Dropout(dropout, name=f"Dropout_{i}"))
-        model.add(keras.layers.Dense(self.N_outputs, name="Output_Layer"))
-        model.compile(optimizer='adam', loss='mse', metrics=['accuracy'])
-        return model
-
-    def make_range_NN(self, N_nodes=(10, 100), N_layers=(1, 4), N_net=40):
-        #Rounds N_tries to fit even tries in each layers 
-        dN_layers = N_layers[1]-N_layers[0] + 1 #The number of layers that is tried 
-        dN_nodes = round(N_net/dN_layers) #Number of node attempts 
-        NN_layers = np.linspace(N_layers[0], N_layers[1], dN_layers, dtype=np.int16) 
-        NN_nodes = np.linspace(N_nodes[0], N_nodes[1], dN_nodes, dtype=np.int16) 
-
-        NNs = []
-        NN_lay_nod = []
-        for layer in NN_layers: 
-            for node in NN_nodes: 
-                NNs.append(self.make_NN(layer, node)) 
-                NN_lay_nod.append([layer, node])
-        return NNs, NN_lay_nod
-
-    def find_opt_hyperparams(self, X_data, y_data, N_nodes=(10, 100), N_layers=(1, 4), N_net=40, epochs=5): 
-        res = {} #Will contain {1: [loss, acc]}
-        NNs, NN_lay_nod = self.make_range_NN(N_nodes=N_nodes, N_layers=N_layers,N_net=N_net)
-        for i, NN in enumerate(NNs): 
-            print(f"\rWorking on NN {i+1} of {len(NNs)}")
-            history = NN.fit(X_data, y_data, epochs=epochs, verbose=0)
-            history = history.history 
-            res[i] = [history['loss'], history['accuracy'], NN_lay_nod[i]]
-        self.res = res
-        return res 
-
-    def sort_results(self, print_res=True):  
-        res_sorted = {} 
-        nodes_sorted = []
-        layers_sorted = []
-        least_loss = 0
-        for i in range(len(self.res)): #Sorts the NNs
-            least_loss_temp = 1e9
-            for j in range(len(self.res)): #Finds the best/worst NNs 
-                loss_NN = self.res[j][0][-1]
-                if loss_NN < least_loss_temp and loss_NN > least_loss: 
-                    j_least = j 
-                    least_loss_temp = loss_NN 
-            res_sorted[f"NN_{j_least}"] = self.res[j_least][0]
-            layers_sorted.append(self.res[j_least][2][0])
-            nodes_sorted.append(self.res[j_least][2][1])
-            least_loss = least_loss_temp
-        if print_res:
-            print("The rankings of the Neural Networks are :")
-            for i, res in enumerate(res_sorted): 
-                print(f"{res} with a loss of {res_sorted[res][-1]}. Nodes = {nodes_sorted[i]}, layers = {layers_sorted[i]}")
-        return res_sorted
-
 
     def plot_opt_NNs(self, N_plots):
         plots = np.linspace(0, len(self.res)-1, N_plots, dtype=np.int16)
@@ -244,6 +224,57 @@ class handle_NNs:
                       loss='mse', metrics=['accuracy'])
         return model
 
+    def find_opt_hyperparams(self, train_gen, test_gen, max_epochs=5, project_name="Param_est_Case_1"):
+        tuner = Hyperband(self.build_model,
+                          objective='val_loss',
+                          max_epochs=max_epochs,
+                          #executions_per_trial=3,
+                          project_name=project_name, 
+                          directory=os.path.normpath('C:/'))
+
+        tuner.search_space_summary()
+        
+        t1 = time.time() 
+        tuner.search(X_train, y_train, validation_data=(X_test, y_test), callbacks=[tf.keras.callbacks.EarlyStopping(patience=2)], verbose=2)
+        print("Tiden for denne kommandoen var: {} min".format(round((time.time()-t1)/60,2)))
+        best_model = tuner.get_best_models(1)[0]
+        best_hyperparameters = tuner.get_best_hyperparameters(1)[0]
+        best_model.summary()
+        print(best_hyperparameters)
+        best_model.save(os.path.abspath("Trained Models\model_1"))
+        return best_model 
+
+    def train_model(self, model, X_train, X_test, y_train, y_test, max_epochs=5, model_name="fully_trained_model1"):
+        pass 
+
+
+if __name__ == "__main__": 
+    chp_air = 1000 
+    Q_HE = lambda x, u, theta: theta[5]*chp_air*(1-np.exp(-theta[4]/(theta[5]*chp_air)))*(x[1]-u[1])
+    dTm_dt = lambda x, u, theta: (u[0]-theta[2]*(x[0]-x[1])-theta[3]*(x[0]-u[1]))/theta[0]
+    dTc_dt = lambda x, u, theta: (theta[2]*(x[0]-x[1])-Q_HE(x,u,theta))/theta[1]
+
+    dxdt = lambda x,u,theta: np.array([dTm_dt(x,u,theta), dTc_dt(x,u,theta)])
+    f_x = lambda x,u,theta: np.array([Q_HE(x,u,theta)])
+
+    x0_range = [(20, 60), (20, 60)]
+    u_range = [(0, 30), (20, 30)]
+    theta_range = [(100, 800), (40, 400), (5,20), (0.1,1), (1,5), (0.3, 1.2)]
+
+    model = dynamical_model(dxdt, f_x)
+    model.setup(0, 60, 600, 20, x0_range, u_range, theta_range)
+
+    data_model = generate_data(model) 
+    X_NN, y_NN = data_model.load_data(os.path.abspath("Training_data\X_data.npy"), os.path.abspath("Training_data\y_data.npy")) #could also generate data 
+    #X_NN, y_NN = data_model.solve_N(2e6, "X_data.npy", "y_data.npy")
+
+    #Move Cm and Cc from y to X: 
+    X_NN = np.append(X_NN.T, y_NN.T[:2], axis=0).T
+    y_NN = y_NN[:,2:]
+    X_train, X_test, y_train, y_test, X_NN_scaled, y_NN_scaled = data_model.prepare_data(X_NN[0:500], y_NN[0:500])
+
+    handler = handle_NNs(len(X_train[0,:]), len(y_train[0,:]))
+    handler.find_opt_hyperparams2(X_train, X_test, y_train, y_test, project_name="Param_est_case1_test1")
 
     
 
