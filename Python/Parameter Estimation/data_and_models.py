@@ -274,7 +274,7 @@ if __name__ == "__main__":
     X_train, X_test, y_train, y_test, X_NN_scaled, y_NN_scaled = data_model.prepare_data(X_NN[0:500], y_NN[0:500])
 
     handler = handle_NNs(len(X_train[0,:]), len(y_train[0,:]))
-    handler.find_opt_hyperparams2(X_train, X_test, y_train, y_test, project_name="Param_est_case1_test1")
+    handler.find_opt_hyperparams(X_train, X_test, y_train, y_test, project_name="Param_est_case1_test1")
 
     
 
