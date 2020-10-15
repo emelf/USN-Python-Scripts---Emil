@@ -66,35 +66,55 @@ class dynamical_model:
         
     def solve(self, x0, u, theta): 
         x_sol, dxdt_sol = self.RK4_solver(x0, u, theta)
-        return x_sol[::self.skip_el], dxdt_sol[::self.skip_el]
+        return x_sol[::self.skip_el], dxdt_sol[::self.skip_el], u[::self.skip_el]
 
     def generator(self, batch_size=32): #I have decided to let x0 have values close to each other, with diff of +-2
-        self.N_steps = 2
-        self.t0 = 0 
-        self.t1 = 0.02
-        self.dt = (self.t1 - self.t0)/self.N_steps 
+        N_steps = 100
+        t0 = 0 
+        t1 = 10
+        dt = (t1 - t0)/N_steps 
+        n_per_sim = 4
+        n_sim = int(batch_size/n_per_sim)
         while True:
             X_NN = np.zeros((batch_size, 6))
             y_NN = np.zeros((batch_size, 6))
-            for j in range(batch_size):
+            for j in range(n_sim):
                 x0 = np.random.uniform(self.x0_range[0][0], self.x0_range[0][1]) 
-                x0 = np.array([x0, x0+np.random.uniform(-2, 2)])
+                x0 = np.array([x0, x0+np.random.uniform(-2, 2)]) #Todo: Set these values to something else? (-2,2)
                 u = self.find_input_vals() 
                 theta = [] 
                 for th in self.theta_range: 
                     theta.append(np.random.uniform(th[0], th[1]))
-                x_sol, dxdt_sol = self.solve(x0, u, theta)
-                X_NN[j][0:2] = x_sol[-1] 
-                X_NN[j][2:4] = dxdt_sol[-1]
-                X_NN[j][4:6] = u[-1] 
-                y_NN[j] = np.array(theta)
-                #X_NN[j][6:] = np.array(theta[0:2])
-                #y_NN[j] =np.array(theta[2:])
+                for i in range(n_per_sim):
+                    x_sol, dxdt_sol, u_in = self.solve_gen(x0, u, theta, N_steps, dt)
+                    x_sol = x_sol[np.random.randint(0,len(x_sol))]
+                    dxdt_sol = dxdt_sol[np.random.randint(0,len(dxdt_sol))]
+                    u_in = u_in[np.random.randint(0,len(u_in))]
+                    X_NN[j*n_per_sim+i][0:2] = x_sol[-1] 
+                    X_NN[j*n_per_sim+i][2:4] = dxdt_sol[-1]
+                    X_NN[j*n_per_sim+i][4:6] = u_in[-1] 
+                    y_NN[j*n_per_sim+i] = np.array(theta)
+                    #X_NN[j][6:] = np.array(theta[0:2])
+                    #y_NN[j] =np.array(theta[2:])
             yield X_NN, y_NN
-                
 
+    def solve_gen(self, x0, u, theta, N_steps, dt): 
+        x_solved = np.zeros((self.N_steps+1, len(x0))) #Premakes the solution arrays for faster execution
+        dx_solved = np.zeros((self.N_steps, len(x0))) #Premakes the solution arrays for faster execution
+        x_solved[0] = np.array(x0)
+        for i in range(self.N_steps): 
+            K1 = self.dxdt(x_solved[i], u[i], theta) #Make sure f returns an array of shape (2,)
+            K2 = self.dxdt(x_solved[i]+K1/2, u[i], theta)
+            K3 = self.dxdt(x_solved[i]+K2/2, u[i], theta)
+            K4 = self.dxdt(x_solved[i]+K3, u[i], theta)
+            K = K1/6 + K2/3 + K3/3 + K4/6
+            x_solved[i+1] = x_solved[i] + K*self.dt
+            dx_solved[i] = K
+        x_sol, dxdt_sol = x_solved[:-1], dx_solved
+        return x_sol[::self.skip_el], dxdt_sol[::self.skip_el], u[::self.skip_el]
+                
     def plot_solve(self, x0, u, theta, names_x, names_u): 
-        x_sol, dx_sol = self.solve(x0, u, theta)
+        x_sol, dx_sol, u_in = self.solve(x0, u, theta)
         t = np.linspace(self.t0, self.t1, self.N_steps)
         fig, ax = plt.subplots(3,1)
         ax[0].set_title("States")
@@ -123,12 +143,11 @@ class generate_data:
             u_in = self.model.find_input_vals(change=change)
             theta = np.array([np.random.uniform(th[0], th[1]) for th in self.model.theta_range])
 
-            x_sol, dxdt_sol = self.model.solve(x0, u_in, theta)
+            x_sol, dxdt_sol, u_in = self.model.solve(x0, u_in, theta)
 
             #Storing values in arrays
             # x_sol = x_sol[::self.model.skip_el]
             # dxdt_sol = dxdt_sol[::self.model.skip_el]
-            u_in = u_in[::self.model.skip_el]
             j = 0
             #print(x_sol)
             #print("len(x) = {}, len(dxdt) = {}, len(u) = {}".format(len(x_sol), len(dxdt_sol), len(u_in)))
@@ -175,40 +194,28 @@ class generate_data:
         X_train, X_test, y_train, y_test = train_test_split(X_NN_scaled, y_NN_scaled, test_size=0.1)
         return X_train, X_test, y_train, y_test, X_NN_scaled, y_NN_scaled
 
-    def generator(self, X_scaler_data, y_scaler_data, batch_size=32): 
+    def generator(self, batch_size=32):
+        gen_data = self.model.generator(batch_size=batch_size)  
         while True:
-            X_scaler = MinMaxScaler() 
-            y_scaler = MinMaxScaler() 
-            X_scaler = X_scaler.fit(X_scaler_data)
-            y_scaler = y_scaler.fit(y_scaler_data) 
-            gen_data = self.model.generator(batch_size=batch_size) 
-            for i in range(batch_size):
-                X_NN, y_NN = next(gen_data)
-                X_NN = X_scaler.transform(X_NN)
-                y_NN = y_scaler.transform(X_NN)
-                yield X_NN, y_NN
+            X_NN, y_NN = next(gen_data)
+            X_NN = self.X_scaler.transform(X_NN)
+            y_NN = self.y_scaler.transform(y_NN)
+            yield X_NN, y_NN
         
 class handle_NNs: 
-    def __init__(self, N_inputs, N_outputs, node_limit=(10, 400), layer_limit=(1,4), epochs=5): 
+    def __init__(self, N_inputs, N_outputs, data_model, node_limit=(10, 400), layer_limit=(1,10), epochs=5): 
         self.N_inputs = N_inputs 
         self.N_outputs = N_outputs 
-
-    def plot_opt_NNs(self, N_plots):
-        plots = np.linspace(0, len(self.res)-1, N_plots, dtype=np.int16)
-        res_opt = self.sort_results(print_res=False)
-        fig, ax = plt.subplots(1,1)
-        for i, res in enumerate(res_opt): 
-            if i in plots: 
-                ax.plot(res_opt[res], label=res)
-
-        ax.set_xlabel("Epochs")
-        ax.set_ylabel("Loss")
-        ax.legend() 
-        plt.show()
+        self.data_model = data_model
+        self.node_limit = node_limit 
+        self.d_node = ceil((self.node_limit[1]-self.node_limit[0])/20)
+        self.layer_limit = layer_limit
+        self.d_layer = ceil((self.layer_limit[1]-self.layer_limit[0])/5)
+        
 
     def build_model(self, hp): #Builds cone-shaped sequential models
-        N1 = hp.Int('n_starting_nodes', min_value=32, max_value=2048, step=128)
-        N_layers = hp.Int('n_layers', min_value=1, max_value=10, step=3)
+        N1 = hp.Int('n_starting_nodes', min_value=self.node_limit[0], max_value=self.node_limit[1], step=self.d_node)
+        N_layers = hp.Int('n_layers', min_value=self.layer_limit[0], max_value=self.layer_limit[1], step=self.d_layer)
         #Find number of nodes in all layers: 
         a = (self.N_outputs-N1)/N_layers
         N_nodes = [int(N1 + a*i) for i in range(N_layers)]    
@@ -224,7 +231,7 @@ class handle_NNs:
                       loss='mse', metrics=['accuracy'])
         return model
 
-    def find_opt_hyperparams(self, train_gen, test_gen, max_epochs=5, project_name="Param_est_Case_1"):
+    def find_opt_hyperparams(self, X_train, X_test, y_train, y_test, max_epochs=5, project_name="Param_est_Case_1"):
         tuner = Hyperband(self.build_model,
                           objective='val_loss',
                           max_epochs=max_epochs,
@@ -244,7 +251,7 @@ class handle_NNs:
         best_model.save(os.path.abspath("Trained Models\model_1"))
         return best_model 
 
-    def train_model(self, model, X_train, X_test, y_train, y_test, max_epochs=5, model_name="fully_trained_model1"):
+    def train_model(self, model, max_epochs=100, model_name="fully_trained_model1"):
         pass 
 
 
